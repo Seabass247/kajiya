@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use egui::CtxRef;
 use kajiya::{
     backend::{vulkan::RenderBackendConfig, *},
     frame_desc::WorldFrameDesc,
@@ -19,6 +20,7 @@ use winit::{
     platform::run_return::EventLoopExtRunReturn,
     window::{Fullscreen, WindowBuilder},
 };
+use kajiya_egui::EguiBackend;
 
 pub struct FrameContext<'a> {
     pub dt_filtered: f32,
@@ -28,6 +30,9 @@ pub struct FrameContext<'a> {
 
     #[cfg(feature = "dear-imgui")]
     pub imgui: Option<ImguiContext<'a>>,
+
+    #[cfg(not(feature = "dear-imgui"))]
+    pub egui: Option<EguiContext<'a>>,
 }
 
 impl<'a> FrameContext<'a> {
@@ -43,6 +48,26 @@ pub struct ImguiContext<'a> {
     ui_renderer: &'a mut UiRenderer,
     window: &'a winit::window::Window,
     dt_filtered: f32,
+}
+
+#[cfg(not(feature = "dear-imgui"))]
+pub struct EguiContext<'a> {
+    egui: &'a egui::CtxRef,
+    egui_backend: &'a mut EguiBackend,
+    ui_renderer: &'a mut UiRenderer,
+    window: &'a winit::window::Window,
+    dt_filtered: f32,
+}
+
+#[cfg(not(feature = "dear-imgui"))]
+impl<'a> EguiContext<'a> {
+    pub fn frame(self, callback: impl FnOnce(&egui::CtxRef)) {
+        self.egui_backend
+            .prepare_frame(self.dt_filtered);
+        callback(self.egui);
+        self.egui_backend
+            .finish_frame(self.window, self.ui_renderer);
+    }
 }
 
 #[cfg(feature = "dear-imgui")]
@@ -64,6 +89,12 @@ struct MainLoopOptional {
     #[cfg(feature = "dear-imgui")]
     imgui: imgui::Context,
 
+    #[cfg(not(feature = "dear-imgui"))]
+    egui_backend: EguiBackend,
+
+    #[cfg(not(feature = "dear-imgui"))]
+    egui: egui::CtxRef,
+    
     #[cfg(feature = "puffin-server")]
     _puffin_server: puffin_http::Server,
 }
@@ -252,6 +283,20 @@ impl SimpleMainLoop {
 
         let rg_renderer = kajiya::rg::renderer::Renderer::new(&render_backend)?;
 
+        #[cfg(not(feature = "dear-imgui"))]
+        let egui = CtxRef::default();
+        #[cfg(not(feature = "dear-imgui"))]
+        egui.set_fonts(egui::FontDefinitions::default());
+        #[cfg(not(feature = "dear-imgui"))]
+        egui.set_style(egui::Style::default());
+    
+        #[cfg(not(feature = "dear-imgui"))]
+        let mut egui_backend =
+            kajiya_egui::EguiBackend::new(rg_renderer.device().clone(), &window, egui.clone());
+
+        #[cfg(not(feature = "dear-imgui"))]
+        egui_backend.create_graphics_resources(swapchain_extent);
+
         #[cfg(feature = "dear-imgui")]
         let mut imgui = imgui::Context::create();
 
@@ -276,6 +321,10 @@ impl SimpleMainLoop {
             imgui_backend,
             #[cfg(feature = "dear-imgui")]
             imgui,
+            #[cfg(not(feature = "dear-imgui"))]
+            egui_backend,
+            #[cfg(not(feature = "dear-imgui"))]
+            egui,
             #[cfg(feature = "puffin-server")]
             _puffin_server: puffin_server,
         };
@@ -410,6 +459,15 @@ impl SimpleMainLoop {
                 imgui: Some(ImguiContext {
                     imgui: &mut optional.imgui,
                     imgui_backend: &mut optional.imgui_backend,
+                    ui_renderer: &mut ui_renderer,
+                    dt_filtered,
+                    window: &window,
+                }),
+
+                #[cfg(not(feature = "dear-imgui"))]
+                egui: Some(EguiContext {
+                    egui: &optional.egui,
+                    egui_backend: &mut optional.egui_backend,
                     ui_renderer: &mut ui_renderer,
                     dt_filtered,
                     window: &window,

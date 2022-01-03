@@ -391,187 +391,21 @@ fn main() -> anyhow::Result<()> {
 
             ctx.world_renderer.rg_debug_hook = locked_rg_debug_hook.clone();
 
-            if show_gui {
-                ctx.imgui.take().unwrap().frame(|ui| {
-                    if imgui::CollapsingHeader::new(im_str!("Tweaks"))
-                        .default_open(true)
-                        .build(ui)
-                    {
-                        imgui::Drag::<f32>::new(im_str!("EV shift"))
-                            .range(-8.0..=8.0)
-                            .speed(0.01)
-                            .build(ui, &mut state.ev_shift);
-
-                        imgui::Drag::<f32>::new(im_str!("Emissive multiplier"))
-                            .range(0.0..=10.0)
-                            .speed(0.1)
-                            .build(ui, &mut state.emissive_multiplier);
-
-                        imgui::Drag::<f32>::new(im_str!("Light intensity multiplier"))
-                            .range(0.0..=1000.0)
-                            .speed(1.0)
-                            .build(ui, &mut state.lights.multiplier);
-
-                        imgui::Drag::<f32>::new(im_str!("Field of view"))
-                            .range(1.0..=120.0)
-                            .speed(0.25)
-                            .build(ui, &mut state.vertical_fov);
-
-                        imgui::Drag::<f32>::new(im_str!("Sun size"))
-                            .range(0.0..=10.0)
-                            .speed(0.02)
-                            .build(ui, &mut ctx.world_renderer.sun_size_multiplier);
-
-                        /*if ui.radio_button_bool(
-                            im_str!("Move sun"),
-                            left_click_edit_mode == LeftClickEditMode::MoveSun,
-                        ) {
-                            left_click_edit_mode = LeftClickEditMode::MoveSun;
-                        }
-
-                        if ui.radio_button_bool(
-                            im_str!("Move local lights"),
-                            left_click_edit_mode == LeftClickEditMode::MoveLocalLights,
-                        ) {
-                            left_click_edit_mode = LeftClickEditMode::MoveLocalLights;
-                        }
-
-                        imgui::Drag::<u32>::new(im_str!("Light count"))
-                            .range(0..=10)
-                            .build(ui, &mut state.lights.count);*/
-
-                        #[cfg(feature = "dlss")]
-                        {
-                            ui.checkbox(im_str!("Use DLSS"), &mut ctx.world_renderer.use_dlss);
-                        }
-                    }
-
-                    /*if imgui::CollapsingHeader::new(im_str!("csgi"))
-                        .default_open(true)
-                        .build(ui)
-                    {
-                        imgui::Drag::<i32>::new(im_str!("Trace subdivision"))
-                            .range(0..=5)
-                            .build(ui, &mut world_renderer.csgi.trace_subdiv);
-
-                        imgui::Drag::<i32>::new(im_str!("Neighbors per frame"))
-                            .range(1..=9)
-                            .build(ui, &mut world_renderer.csgi.neighbors_per_frame);
-                    }*/
-
-                    if imgui::CollapsingHeader::new(im_str!("Debug"))
-                        .default_open(false)
-                        .build(ui)
-                    {
-                        if ui.radio_button_bool(
-                            im_str!("Scene geometry"),
-                            ctx.world_renderer.debug_mode == RenderDebugMode::None,
-                        ) {
-                            ctx.world_renderer.debug_mode = RenderDebugMode::None;
-                        }
-
-                        if ui.radio_button_bool(
-                            im_str!("GI voxel grid"),
-                            matches!(
-                                ctx.world_renderer.debug_mode,
-                                RenderDebugMode::CsgiVoxelGrid { .. }
-                            ),
-                        ) {
-                            ctx.world_renderer.debug_mode = RenderDebugMode::CsgiVoxelGrid {
-                                cascade_idx: debug_gi_cascade_idx as _,
-                            };
-                        }
-
-                        if matches!(
-                            ctx.world_renderer.debug_mode,
-                            RenderDebugMode::CsgiVoxelGrid { .. }
-                        ) {
-                            imgui::Drag::<u32>::new(im_str!("Cascade index"))
-                                .range(0..=3)
-                                .build(ui, &mut debug_gi_cascade_idx);
-
-                            ctx.world_renderer.debug_mode = RenderDebugMode::CsgiVoxelGrid {
-                                cascade_idx: debug_gi_cascade_idx as _,
-                            };
-                        }
-
-                        if ui.radio_button_bool(
-                            im_str!("GI voxel radiance"),
-                            ctx.world_renderer.debug_mode == RenderDebugMode::CsgiRadiance,
-                        ) {
-                            ctx.world_renderer.debug_mode = RenderDebugMode::CsgiRadiance;
-                        }
-
-                        imgui::ComboBox::new(im_str!("Shading")).build_simple_string(
-                            ui,
-                            &mut ctx.world_renderer.debug_shading_mode,
-                            &[
-                                im_str!("Default"),
-                                im_str!("No base color"),
-                                im_str!("Diffuse GI"),
-                                im_str!("Reflections"),
-                                im_str!("RTX OFF"),
-                            ],
-                        );
-
-                        imgui::Drag::<u32>::new(im_str!("Max FPS"))
-                            .range(1..=MAX_FPS_LIMIT)
-                            .build(ui, &mut max_fps);
-                    }
-
-                    if imgui::CollapsingHeader::new(im_str!("GPU passes"))
-                        .default_open(true)
-                        .build(ui)
-                    {
-                        let gpu_stats = gpu_profiler::get_stats();
-                        ui.text(format!("CPU frame time: {:.3}ms", ctx.dt_filtered * 1000.0));
-
-                        let ordered_scopes = gpu_stats.get_ordered();
-                        let gpu_time_ms: f64 = ordered_scopes.iter().map(|(_, ms)| ms).sum();
-
-                        ui.text(format!("GPU frame time: {:.3}ms", gpu_time_ms));
-
-                        for (scope, ms) in ordered_scopes {
-                            if scope.name == "debug" || scope.name.starts_with('_') {
-                                continue;
-                            }
-
-                            let style = locked_rg_debug_hook.as_ref().and_then(|hook| {
-                                if hook.render_scope == scope {
-                                    Some(ui.push_style_color(
-                                        imgui::StyleColor::Text,
-                                        [1.0, 1.0, 0.1, 1.0],
-                                    ))
-                                } else {
-                                    None
-                                }
-                            });
-
-                            ui.text(format!("{}: {:.3}ms", scope.name, ms));
-
-                            if let Some(style) = style {
-                                style.pop(ui);
-                            }
-
-                            if ui.is_item_hovered() {
-                                ctx.world_renderer.rg_debug_hook =
-                                    Some(kajiya::rg::GraphDebugHook {
-                                        render_scope: scope.clone(),
-                                    });
-
-                                if ui.is_item_clicked(imgui::MouseButton::Left) {
-                                    if locked_rg_debug_hook == ctx.world_renderer.rg_debug_hook {
-                                        locked_rg_debug_hook = None;
-                                    } else {
-                                        locked_rg_debug_hook =
-                                            ctx.world_renderer.rg_debug_hook.clone();
-                                    }
-                                }
-                            }
-                        }
-                    }
-                });
-            }
+            // if show_gui {
+            //     ctx.egui.take().unwrap().frame(|egui| {
+            //         egui::Window::new("My Window")
+            //         .resizable(true)
+            //         .show(egui, |ui| {
+            //             ui.heading("Hello");
+            //             ui.label("Hello egui!");
+            //             ui.separator();
+            //             ui.hyperlink("https://github.com/emilk/egui");
+            //             ui.separator();
+            //             ui.label("Rotation");
+            //             ui.separator();
+            //         });
+            //     });
+            // }
 
             ctx.world_renderer.ev_shift = state.ev_shift;
 
