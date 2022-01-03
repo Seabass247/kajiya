@@ -3,7 +3,7 @@
 
 use arrayvec::ArrayVec;
 use ash::{vk::{self, RenderPass}, Device};
-use egui::{Context, epaint::Vertex, CtxRef, vec2};
+use egui::{Context, epaint::Vertex, CtxRef, vec2, RawInput, FontImage};
 use memoffset::offset_of;
 use std::{
     ffi::CStr,
@@ -84,7 +84,8 @@ impl Renderer {
         device: &Device,
         physical_device_properties: &vk::PhysicalDeviceProperties,
         physical_device_memory_properties: &vk::PhysicalDeviceMemoryProperties,
-        mut egui: CtxRef,
+        mut egui: &mut CtxRef,
+        raw_input: RawInput
     ) -> Self {
         let vertex_shader = load_shader_module(device, include_bytes!("egui.vert.spv"));
         let fragment_shader = load_shader_module(device, include_bytes!("egui.frag.spv"));
@@ -175,17 +176,11 @@ impl Renderer {
             )
         };
 
-        // Create raw_input to get texture
-        let raw_input = egui::RawInput {
-            pixels_per_point: Some(scale_factor as f32),
-            screen_rect: Some(egui::Rect::from_min_size(
-                Default::default(),
-                vec2(physical_width as f32, physical_height as f32) / scale_factor as f32,
-            )),
-            time: Some(0.0),
-            ..Default::default()
-        };
-        let (_,_) = egui.run(raw_input, |_| {});
+        let (_,_) = egui.run(raw_input, |ctx| {
+            // egui::CentralPanel::default().show(&ctx, |ui| {
+            //     ui.label("Hello egui!");
+            // });
+        });
         let texture = egui.font_image();
 
         let (image_buffer, image_mem_offset) = {

@@ -52,7 +52,6 @@ pub struct ImguiContext<'a> {
 
 #[cfg(not(feature = "dear-imgui"))]
 pub struct EguiContext<'a> {
-    egui: &'a egui::CtxRef,
     egui_backend: &'a mut EguiBackend,
     ui_renderer: &'a mut UiRenderer,
     window: &'a winit::window::Window,
@@ -64,7 +63,7 @@ impl<'a> EguiContext<'a> {
     pub fn frame(self, callback: impl FnOnce(&egui::CtxRef)) {
         self.egui_backend
             .prepare_frame(self.dt_filtered);
-        callback(self.egui);
+        callback(&self.egui_backend.context);
         self.egui_backend
             .finish_frame(self.window, self.ui_renderer);
     }
@@ -92,9 +91,6 @@ struct MainLoopOptional {
     #[cfg(not(feature = "dear-imgui"))]
     egui_backend: EguiBackend,
 
-    #[cfg(not(feature = "dear-imgui"))]
-    egui: egui::CtxRef,
-    
     #[cfg(feature = "puffin-server")]
     _puffin_server: puffin_http::Server,
 }
@@ -292,7 +288,7 @@ impl SimpleMainLoop {
     
         #[cfg(not(feature = "dear-imgui"))]
         let mut egui_backend =
-            kajiya_egui::EguiBackend::new(rg_renderer.device().clone(), &window, egui.clone());
+            kajiya_egui::EguiBackend::new(rg_renderer.device().clone(), &window, egui);
 
         #[cfg(not(feature = "dear-imgui"))]
         egui_backend.create_graphics_resources(swapchain_extent);
@@ -323,8 +319,7 @@ impl SimpleMainLoop {
             imgui,
             #[cfg(not(feature = "dear-imgui"))]
             egui_backend,
-            #[cfg(not(feature = "dear-imgui"))]
-            egui,
+
             #[cfg(feature = "puffin-server")]
             _puffin_server: puffin_server,
         };
@@ -466,7 +461,6 @@ impl SimpleMainLoop {
 
                 #[cfg(not(feature = "dear-imgui"))]
                 egui: Some(EguiContext {
-                    egui: &optional.egui,
                     egui_backend: &mut optional.egui_backend,
                     ui_renderer: &mut ui_renderer,
                     dt_filtered,

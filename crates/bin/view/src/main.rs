@@ -391,21 +391,21 @@ fn main() -> anyhow::Result<()> {
 
             ctx.world_renderer.rg_debug_hook = locked_rg_debug_hook.clone();
 
-            // if show_gui {
-            //     ctx.egui.take().unwrap().frame(|egui| {
-            //         egui::Window::new("My Window")
-            //         .resizable(true)
-            //         .show(egui, |ui| {
-            //             ui.heading("Hello");
-            //             ui.label("Hello egui!");
-            //             ui.separator();
-            //             ui.hyperlink("https://github.com/emilk/egui");
-            //             ui.separator();
-            //             ui.label("Rotation");
-            //             ui.separator();
-            //         });
-            //     });
-            // }
+            if show_gui {
+                ctx.egui.take().unwrap().frame(|egui| {
+                    egui::Window::new("My Window")
+                    .resizable(true)
+                    .show(egui, |ui| {
+                        ui.heading("Hello");
+                        ui.label("Hello egui!");
+                        ui.separator();
+                        ui.hyperlink("https://github.com/emilk/egui");
+                        ui.separator();
+                        ui.label("Rotation");
+                        ui.separator();
+                    });
+                });
+            }
 
             ctx.world_renderer.ev_shift = state.ev_shift;
 

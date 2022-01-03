@@ -21,20 +21,20 @@ struct GfxResources {
 pub struct EguiBackendInner {
     egui_renderer: ash_egui::Renderer,
     gfx: Option<GfxResources>,
-    raw_input: ash_egui::egui::RawInput,
-    context: egui::CtxRef,
 }
 
 pub struct EguiBackend {
     inner: Arc<Mutex<EguiBackendInner>>,
     device: Arc<Device>,
+    raw_input: ash_egui::egui::RawInput,
+    pub context: egui::CtxRef,
 }
 
 impl EguiBackend {
     pub fn new(
         device: Arc<Device>,
         window: &winit::window::Window,
-        context: CtxRef,
+        mut context: CtxRef,
     ) -> Self {
         // Create raw_input
         let raw_input = egui::RawInput {
@@ -55,7 +55,8 @@ impl EguiBackend {
                 &device.raw,
                 &device.physical_device().properties,
                 &device.physical_device().memory_properties,
-                context.clone(),
+                &mut context,
+                raw_input.clone(),
             )
         };
 
@@ -64,9 +65,9 @@ impl EguiBackend {
             inner: Arc::new(Mutex::new(EguiBackendInner {
                 egui_renderer,
                 gfx: None,
-                raw_input,
-                context,
             })),
+            context,
+            raw_input,
         }
     }
 
@@ -111,14 +112,15 @@ impl EguiBackend {
         dt: f32,
         // window: &winit::window::Window,
     ) {
+
         // update time
-        if let Some(time) = self.inner.lock().raw_input.time {
-            self.inner.lock().raw_input.time = Some(time + dt as f64);
+        if let Some(time) = self.raw_input.time {
+            self.raw_input.time = Some(time + dt as f64);
         } else {
-            self.inner.lock().raw_input.time = Some(0.0);
+            self.raw_input.time = Some(0.0);
         }
 
-        self.inner.lock().context.begin_frame(self.inner.lock().raw_input.take());
+        self.context.begin_frame(self.raw_input.take());
     }
 
     pub fn finish_frame(
@@ -132,8 +134,8 @@ impl EguiBackend {
         let device = self.device.clone();
         let gui_extent = [window.inner_size().width, window.inner_size().height];
 
-        let (_, clipped_shapes) = self.inner.lock().context.end_frame();
-        let clipped_meshes = self.inner.lock().context.tessellate(clipped_shapes);
+        let (_, clipped_shapes) = self.context.end_frame();
+        let clipped_meshes = self.context.tessellate(clipped_shapes);
 
         ui_renderer.ui_frame = Some((
             Box::new(move |cb| {
