@@ -406,10 +406,10 @@ fn main() -> anyhow::Result<()> {
             }
 
             if show_gui {
-                egui.frame(|egui| {
+                egui.frame(|egui_ctx| {
                     egui::Window::new("My Window")
                     .resizable(true)
-                    .show(egui, |ui| {
+                    .show(egui_ctx, |ui| {
                         ui.heading("Hello");
                         ui.label("Hello egui!");
                         ui.separator();
