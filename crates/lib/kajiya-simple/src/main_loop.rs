@@ -52,7 +52,7 @@ pub struct ImguiContext<'a> {
 
 #[cfg(not(feature = "dear-imgui"))]
 pub struct EguiContext<'a> {
-    egui_backend: &'a mut EguiBackend,
+    pub egui_backend: &'a mut EguiBackend,
     ui_renderer: &'a mut UiRenderer,
     window: &'a winit::window::Window,
     dt_filtered: f32,

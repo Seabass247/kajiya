@@ -1,6 +1,7 @@
 use anyhow::Context;
 
 use dolly::prelude::*;
+use egui::pos2;
 use imgui::im_str;
 use kajiya::{rg::GraphDebugHook, world_renderer::AddMeshOptions};
 use kajiya_simple::*;
@@ -391,8 +392,21 @@ fn main() -> anyhow::Result<()> {
 
             ctx.world_renderer.rg_debug_hook = locked_rg_debug_hook.clone();
 
+            let egui = ctx.egui.take().unwrap();
+            
+            {
+                    let pixels_per_point = egui.egui_backend.raw_input
+                        .pixels_per_point
+                        .unwrap_or_else(|| egui.egui_backend.context.pixels_per_point());
+                    let pos = pos2(
+                        mouse.physical_position.x as f32 / pixels_per_point,
+                        mouse.physical_position.y as f32 / pixels_per_point,
+                    );
+                    egui.egui_backend.raw_input.events.push(egui::Event::PointerMoved(pos));
+            }
+
             if show_gui {
-                ctx.egui.take().unwrap().frame(|egui| {
+                egui.frame(|egui| {
                     egui::Window::new("My Window")
                     .resizable(true)
                     .show(egui, |ui| {

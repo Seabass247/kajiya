@@ -87,8 +87,8 @@ impl Renderer {
         mut egui: &mut CtxRef,
         raw_input: RawInput
     ) -> Self {
-        let vertex_shader = load_shader_module(device, include_bytes!("test.vert.spv"));
-        let fragment_shader = load_shader_module(device, include_bytes!("test.frag.spv"));
+        let vertex_shader = load_shader_module(device, include_bytes!("egui.vert.spv"));
+        let fragment_shader = load_shader_module(device, include_bytes!("egui.frag.spv"));
 
         let sampler = {
             let sampler_create_info = vk::SamplerCreateInfo::builder()
@@ -330,15 +330,9 @@ impl Renderer {
                 unsafe { (host_mapping as *mut u8).add(image_mem_offset) } as *mut c_uchar;
 
             assert_eq!(texture.pixels.len(), texture.width * texture.height);
-            let srgba_pixels: Vec<u8> = texture.srgba_pixels(1.0)
+            let srgba_pixels: Vec<u8> = texture.srgba_pixels(0.25)
                 .flat_map(|srgba| vec![srgba.r(), srgba.g(), srgba.b(), srgba.a()])
                 .collect::<Vec<_>>();
-            let data = texture
-                .pixels
-                .iter()
-                .flat_map(|&r| vec![r, r, r, r])
-                .collect::<Vec<_>>();
-
             unsafe {
                 image_base.copy_from_nonoverlapping(srgba_pixels.as_ptr(), srgba_pixels.len())
             };

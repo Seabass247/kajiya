@@ -26,7 +26,7 @@ pub struct EguiBackendInner {
 pub struct EguiBackend {
     inner: Arc<Mutex<EguiBackendInner>>,
     device: Arc<Device>,
-    raw_input: ash_egui::egui::RawInput,
+    pub raw_input: ash_egui::egui::RawInput,
     pub context: egui::CtxRef,
 }
 
