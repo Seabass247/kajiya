@@ -285,7 +285,8 @@ impl SimpleMainLoop {
         egui.set_fonts(egui::FontDefinitions::default());
         #[cfg(not(feature = "dear-imgui"))]
         egui.set_style(egui::Style::default());
-    
+        egui.set_visuals(egui::style::Visuals::dark());
+        
         #[cfg(not(feature = "dear-imgui"))]
         let mut egui_backend =
             kajiya_egui::EguiBackend::new(rg_renderer.device().clone(), &window, egui);

@@ -3,7 +3,7 @@
 
 use arrayvec::ArrayVec;
 use ash::{vk::{self, RenderPass}, Device};
-use egui::{Context, epaint::Vertex, CtxRef, vec2, RawInput, FontImage};
+use egui::{Context, epaint::{Vertex, self}, CtxRef, vec2, RawInput, FontImage};
 use memoffset::offset_of;
 use std::{
     ffi::CStr,
@@ -131,6 +131,7 @@ impl Renderer {
                 size: (Renderer::VERTEX_COUNT_PER_FRAME * mem::size_of::<Vertex>())
                     as vk::DeviceSize,
                 usage: vk::BufferUsageFlags::VERTEX_BUFFER,
+                sharing_mode: vk::SharingMode::EXCLUSIVE,
                 ..Default::default()
             };
             let mut buffers = ArrayVec::<[vk::Buffer; Renderer::FRAME_COUNT]>::new();
@@ -187,6 +188,7 @@ impl Renderer {
             let buffer_create_info = vk::BufferCreateInfo {
                 size: vk::DeviceSize::from(texture.width as u64 * texture.height as u64),
                 usage: vk::BufferUsageFlags::TRANSFER_SRC,
+                sharing_mode: vk::SharingMode::EXCLUSIVE,
                 ..Default::default()
             };
             let buffer = unsafe { device.create_buffer(&buffer_create_info, None) }.unwrap();
@@ -605,6 +607,49 @@ impl Renderer {
                 );
             }
 
+            unsafe {
+                device.cmd_bind_vertex_buffers(
+                    command_buffer,
+                    0,
+                    slice::from_ref(&vertex_buffer),
+                    &[0],
+                );
+                device.cmd_bind_index_buffer(
+                    command_buffer,
+                    index_buffer,
+                    0,
+                    vk::IndexType::UINT32,
+                );
+            }
+
+            unsafe { device.cmd_set_viewport(
+                command_buffer,
+                0,
+                &[vk::Viewport::builder()
+                    .x(0.0)
+                    .y(0.0)
+                    .width(self.physical_width as f32)
+                    .height(self.physical_height as f32)
+                    .min_depth(0.0)
+                    .max_depth(1.0)
+                    .build()],
+                );
+            };
+            // let width = self.physical_width as f32 * self.scale_factor as f32;
+            // let height = self.physical_height as f32 * self.scale_factor as f32;
+            // let dims_rcp = [1.0 / width, 1.0 / height];
+            // unsafe {
+            //     device.cmd_push_constants(
+            //         command_buffer,
+            //         self.pipeline_layout,
+            //         vk::ShaderStageFlags::VERTEX,
+            //         0,
+            //         std::slice::from_raw_parts(
+            //             dims_rcp.as_ptr() as *const f32 as *const u8,
+            //             Renderer::PUSH_CONSTANT_SIZE,
+            //         ),
+            //     )
+            // };
             let width_points = self.physical_width as f32 / self.scale_factor as f32;
             let height_points = self.physical_height as f32 / self.scale_factor as f32;
             unsafe {
@@ -623,35 +668,6 @@ impl Renderer {
                     bytes_of(&height_points),
                 );
             };
-
-            unsafe { device.cmd_set_viewport(
-                command_buffer,
-                0,
-                &[vk::Viewport::builder()
-                    .x(0.0)
-                    .y(0.0)
-                    .width(self.physical_width as f32)
-                    .height(self.physical_height as f32)
-                    .min_depth(0.0)
-                    .max_depth(1.0)
-                    .build()],
-                );
-             };
-            
-            unsafe {
-                device.cmd_bind_vertex_buffers(
-                    command_buffer,
-                    0,
-                    slice::from_ref(&vertex_buffer),
-                    &[0],
-                );
-                device.cmd_bind_index_buffer(
-                    command_buffer,
-                    index_buffer,
-                    0,
-                    vk::IndexType::UINT16,
-                );
-            }
 
             // let clip_off = draw_data.display_pos;
             // let clip_scale = draw_data.framebuffer_scale;
@@ -679,23 +695,21 @@ impl Renderer {
                     continue;
                 }
 
-                let vtx_buffer = &mesh.vertices;
-                let idx_buffer = &mesh.indices;
-                let next_vertex_offset = vertex_offset + vtx_buffer.len();
-                let next_index_offset = index_offset + idx_buffer.len();
-                if next_vertex_offset > Renderer::VERTEX_COUNT_PER_FRAME
-                    || next_index_offset > Renderer::INDEX_COUNT_PER_FRAME
-                {
-                    break;
-                }
+                let next_vertex_offset = vertex_offset + mesh.vertices.len();
+                let next_index_offset = index_offset + mesh.indices.len();
+                // if next_vertex_offset > Renderer::VERTEX_COUNT_PER_FRAME
+                //     || next_index_offset > Renderer::INDEX_COUNT_PER_FRAME
+                // {
+                //     break;
+                // }
 
                 unsafe {
                     vertex_base
                         .add(vertex_offset)
-                        .copy_from_nonoverlapping(vtx_buffer.as_ptr(), vtx_buffer.len());
+                        .copy_from_nonoverlapping(mesh.vertices.as_ptr(), mesh.vertices.len());
                     index_base
                         .add(index_offset)
-                        .copy_from_nonoverlapping(idx_buffer.as_ptr(), idx_buffer.len());
+                        .copy_from_nonoverlapping(mesh.indices.as_ptr(), mesh.indices.len());
                 }
     
                 // record draw commands
@@ -744,12 +758,14 @@ impl Renderer {
                         vertex_offset as i32,
                         0,
                     );
+                    index_offset += mesh.indices.len();
                 }
     
-                vertex_offset += mesh.vertices.len();
-                index_offset += mesh.indices.len();
+                vertex_offset = next_vertex_offset;
+                assert_eq!(index_offset, next_index_offset);
             }
     
             }
     }
+
 }
