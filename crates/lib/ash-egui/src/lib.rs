@@ -9,7 +9,7 @@ use std::{
     ffi::CStr,
     mem,
     os::raw::{c_uchar, c_void},
-    slice,
+    slice, ops::Index,
 };
 use bytemuck::bytes_of;
 
@@ -87,15 +87,20 @@ impl Renderer {
         mut egui: &mut CtxRef,
         raw_input: RawInput
     ) -> Self {
-        let vertex_shader = load_shader_module(device, include_bytes!("egui.vert.spv"));
-        let fragment_shader = load_shader_module(device, include_bytes!("egui.frag.spv"));
+        let vertex_shader = load_shader_module(device, include_bytes!("test.vert.spv"));
+        let fragment_shader = load_shader_module(device, include_bytes!("test.frag.spv"));
 
         let sampler = {
-            let sampler_create_info = vk::SamplerCreateInfo {
-                mag_filter: vk::Filter::LINEAR,
-                min_filter: vk::Filter::LINEAR,
-                ..Default::default()
-            };
+            let sampler_create_info = vk::SamplerCreateInfo::builder()
+            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .anisotropy_enable(false)
+            .min_filter(vk::Filter::LINEAR)
+            .mag_filter(vk::Filter::LINEAR)
+            .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+            .min_lod(0.0)
+            .max_lod(vk::LOD_CLAMP_NONE);
             unsafe { device.create_sampler(&sampler_create_info, None) }.unwrap()
         };
 
@@ -186,7 +191,7 @@ impl Renderer {
 
         let (image_buffer, image_mem_offset) = {
             let buffer_create_info = vk::BufferCreateInfo {
-                size: vk::DeviceSize::from(texture.width as u64 * texture.height as u64),
+                size: vk::DeviceSize::from(texture.width as u64 * texture.height as u64 * 4),
                 usage: vk::BufferUsageFlags::TRANSFER_SRC,
                 sharing_mode: vk::SharingMode::EXCLUSIVE,
                 ..Default::default()
@@ -230,20 +235,21 @@ impl Renderer {
             unsafe { device.map_memory(host_mem, 0, vk::WHOLE_SIZE, Default::default()) }.unwrap();
 
         let image = {
-            let image_create_info = vk::ImageCreateInfo {
-                image_type: vk::ImageType::TYPE_2D,
-                format: vk::Format::R8_UNORM,
-                extent: vk::Extent3D {
-                    width: texture.width as u32,
-                    height: texture.height as u32,
-                    depth: 1,
-                },
-                mip_levels: 1,
-                array_layers: 1,
-                samples: vk::SampleCountFlags::TYPE_1,
-                usage: vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST,
-                ..Default::default()
-            };
+            let image_create_info = vk::ImageCreateInfo::builder()
+            .format(vk::Format::R8G8B8A8_UNORM)
+            .initial_layout(vk::ImageLayout::UNDEFINED)
+            .samples(vk::SampleCountFlags::TYPE_1)
+            .tiling(vk::ImageTiling::OPTIMAL)
+            .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_DST)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .image_type(vk::ImageType::TYPE_2D)
+            .mip_levels(1)
+            .array_layers(1)
+            .extent(vk::Extent3D {
+                width: texture.width as u32,
+                height: texture.height as u32,
+                depth: 1,
+            });
             unsafe { device.create_image(&image_create_info, None) }.unwrap()
         };
 
@@ -288,24 +294,19 @@ impl Renderer {
         };
 
         let image_view = {
-            let image_view_create_info = vk::ImageViewCreateInfo {
-                image,
-                view_type: vk::ImageViewType::TYPE_2D,
-                format: vk::Format::R8_UNORM,
-                subresource_range: vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    level_count: 1,
-                    layer_count: 1,
-                    ..Default::default()
-                },
-                components: vk::ComponentMapping {
-                    r: vk::ComponentSwizzle::ONE,
-                    g: vk::ComponentSwizzle::ONE,
-                    b: vk::ComponentSwizzle::ONE,
-                    a: vk::ComponentSwizzle::R,
-                },
-                ..Default::default()
-            };
+            let image_view_create_info = vk::ImageViewCreateInfo::builder()
+            .image(image)
+            .format(vk::Format::R8G8B8A8_UNORM)
+            .view_type(vk::ImageViewType::TYPE_2D)
+            .subresource_range(
+                vk::ImageSubresourceRange::builder()
+                    .aspect_mask(vk::ImageAspectFlags::COLOR)
+                    .base_array_layer(0)
+                    .base_mip_level(0)
+                    .layer_count(1)
+                    .level_count(1)
+                    .build(),
+            );
             unsafe { device.create_image_view(&image_view_create_info, None) }.unwrap()
         };
 
@@ -329,8 +330,17 @@ impl Renderer {
                 unsafe { (host_mapping as *mut u8).add(image_mem_offset) } as *mut c_uchar;
 
             assert_eq!(texture.pixels.len(), texture.width * texture.height);
+            let srgba_pixels: Vec<u8> = texture.srgba_pixels(1.0)
+                .flat_map(|srgba| vec![srgba.r(), srgba.g(), srgba.b(), srgba.a()])
+                .collect::<Vec<_>>();
+            let data = texture
+                .pixels
+                .iter()
+                .flat_map(|&r| vec![r, r, r, r])
+                .collect::<Vec<_>>();
+
             unsafe {
-                image_base.copy_from_nonoverlapping(texture.pixels.as_ptr(), texture.pixels.len())
+                image_base.copy_from_nonoverlapping(srgba_pixels.as_ptr(), srgba_pixels.len())
             };
 
             /*let mapped_memory_range = vk::MappedMemoryRange {
@@ -524,19 +534,35 @@ impl Renderer {
                 ..Default::default()
             };
 
-            let rasterization_state_create_info = vk::PipelineRasterizationStateCreateInfo {
-                polygon_mode: vk::PolygonMode::FILL,
-                cull_mode: vk::CullModeFlags::NONE,
-                front_face: vk::FrontFace::CLOCKWISE,
-                line_width: 1.0,
-                ..Default::default()
-            };
+            let rasterization_state_create_info = vk::PipelineRasterizationStateCreateInfo::builder()
+                .depth_clamp_enable(false)
+                .rasterizer_discard_enable(false)
+                .polygon_mode(vk::PolygonMode::FILL)
+                .cull_mode(vk::CullModeFlags::NONE)
+                .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+                .depth_bias_enable(false)
+                .line_width(1.0);
+
+            let stencil_op = vk::StencilOpState::builder()
+                .fail_op(vk::StencilOp::KEEP)
+                .pass_op(vk::StencilOp::KEEP)
+                .compare_op(vk::CompareOp::ALWAYS)
+                .build();
+            let depth_stencil_info = vk::PipelineDepthStencilStateCreateInfo::builder()
+                .depth_test_enable(false)
+                .depth_write_enable(false)
+                .depth_compare_op(vk::CompareOp::ALWAYS)
+                .depth_bounds_test_enable(false)
+                .stencil_test_enable(false)
+                .front(stencil_op)
+                .back(stencil_op);
+
             let multisample_state_create_info = vk::PipelineMultisampleStateCreateInfo {
                 rasterization_samples: vk::SampleCountFlags::TYPE_1,
                 ..Default::default()
             };
 
-            let color_blend_attachment_state = vk::PipelineColorBlendAttachmentState {
+            let color_blend_attachments = [vk::PipelineColorBlendAttachmentState {
                 blend_enable: vk::TRUE,
                 src_color_blend_factor: vk::BlendFactor::SRC_ALPHA,
                 dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
@@ -545,9 +571,10 @@ impl Renderer {
                 dst_alpha_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
                 alpha_blend_op: vk::BlendOp::ADD,
                 color_write_mask: vk::ColorComponentFlags::all(),
-            };
-            let color_blend_state_create_info = vk::PipelineColorBlendStateCreateInfo::builder()
-                .attachments(slice::from_ref(&color_blend_attachment_state));
+            }];
+            
+            let color_blend_info = vk::PipelineColorBlendStateCreateInfo::builder()
+                .attachments(&color_blend_attachments);
 
             let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
             let pipeline_dynamic_state_create_info =
@@ -560,7 +587,8 @@ impl Renderer {
                 .viewport_state(&viewport_state_create_info)
                 .rasterization_state(&rasterization_state_create_info)
                 .multisample_state(&multisample_state_create_info)
-                .color_blend_state(&color_blend_state_create_info)
+                .depth_stencil_state(&depth_stencil_info)
+                .color_blend_state(&color_blend_info)
                 .dynamic_state(&pipeline_dynamic_state_create_info)
                 .layout(self.pipeline_layout)
                 .render_pass(render_pass);

@@ -17,6 +17,14 @@ vec3 srgb_to_linear(vec3 srgb) {
     return mix(higher, lower, cutoff);
 }
 
+vec3 linear_to_srgb(vec3 linearRGB) {
+	bvec3 cutoff = lessThan(linearRGB, vec3(0.0031308));
+	vec3 higher = vec3(1.055)*pow(linearRGB, vec3(1.0/2.4)) - vec3(0.055);
+	vec3 lower = linearRGB * vec3(12.92);
+
+	return mix(higher, lower, cutoff);
+}
+
 void main() {
   gl_Position =
       vec4(2.0 * inPos.x / pushConstants.screen_size.x - 1.0,
