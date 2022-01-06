@@ -62,11 +62,12 @@ pub struct EguiContext<'a> {
 #[cfg(not(feature = "dear-imgui"))]
 impl<'a> EguiContext<'a> {
     pub fn frame(self, callback: impl FnOnce(&egui::CtxRef)) {
-        self.egui_backend
-            .prepare_frame(self.egui_ctx, self.dt_filtered);
         callback(&self.egui_ctx);
         self.egui_backend
-            .finish_frame(self.egui_ctx, self.window, self.ui_renderer);
+            .prepare_frame(self.egui_ctx, self.dt_filtered);
+        let gui_render_extent = (self.window.inner_size().width, self.window.inner_size().height);
+        self.egui_backend
+            .finish_frame(self.egui_ctx, gui_render_extent, self.ui_renderer);
     }
 }
 

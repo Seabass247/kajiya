@@ -127,14 +127,13 @@ impl EguiBackend {
     pub fn finish_frame(
         &mut self,
         context: &mut CtxRef,
-        window: &winit::window::Window,
+        gui_render_extent: (u32, u32),
         ui_renderer: &mut UiRenderer,
     ) {
         let ui_target_image =  self.inner.lock().get_target_image().unwrap();
 
         let inner = self.inner.clone();
         let device = self.device.clone();
-        let gui_extent = [window.inner_size().width, window.inner_size().height];
 
         let (_, clipped_shapes) = context.end_frame();
         let clipped_meshes = context.tessellate(clipped_shapes);
@@ -143,7 +142,7 @@ impl EguiBackend {
             Box::new(move |cb| {
                 inner
                     .lock()
-                    .render(gui_extent, clipped_meshes, device, cb)
+                    .render([gui_render_extent.0, gui_render_extent.1], clipped_meshes, device, cb)
                     .expect("ui.render");
             }),
             ui_target_image,
