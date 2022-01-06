@@ -397,7 +397,7 @@ fn main() -> anyhow::Result<()> {
             {
                     let pixels_per_point = egui.egui_backend.raw_input
                         .pixels_per_point
-                        .unwrap_or_else(|| egui.egui_backend.context.pixels_per_point());
+                        .unwrap_or_else(|| egui.egui_ctx.pixels_per_point());
                     let pos = pos2(
                         mouse.physical_position.x as f32 / pixels_per_point,
                         mouse.physical_position.y as f32 / pixels_per_point,

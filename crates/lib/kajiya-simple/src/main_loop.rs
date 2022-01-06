@@ -53,6 +53,7 @@ pub struct ImguiContext<'a> {
 #[cfg(not(feature = "dear-imgui"))]
 pub struct EguiContext<'a> {
     pub egui_backend: &'a mut EguiBackend,
+    pub egui_ctx: &'a mut CtxRef,
     ui_renderer: &'a mut UiRenderer,
     window: &'a winit::window::Window,
     dt_filtered: f32,
@@ -62,10 +63,10 @@ pub struct EguiContext<'a> {
 impl<'a> EguiContext<'a> {
     pub fn frame(self, callback: impl FnOnce(&egui::CtxRef)) {
         self.egui_backend
-            .prepare_frame(self.dt_filtered);
-        callback(&self.egui_backend.context);
+            .prepare_frame(self.egui_ctx, self.dt_filtered);
+        callback(&self.egui_ctx);
         self.egui_backend
-            .finish_frame(self.window, self.ui_renderer);
+            .finish_frame(self.egui_ctx, self.window, self.ui_renderer);
     }
 }
 
@@ -90,6 +91,7 @@ struct MainLoopOptional {
 
     #[cfg(not(feature = "dear-imgui"))]
     egui_backend: EguiBackend,
+    egui: CtxRef,
 
     #[cfg(feature = "puffin-server")]
     _puffin_server: puffin_http::Server,
@@ -280,7 +282,7 @@ impl SimpleMainLoop {
         let rg_renderer = kajiya::rg::renderer::Renderer::new(&render_backend)?;
 
         #[cfg(not(feature = "dear-imgui"))]
-        let egui = CtxRef::default();
+        let mut egui = CtxRef::default();
         #[cfg(not(feature = "dear-imgui"))]
         egui.set_fonts(egui::FontDefinitions::default());
         #[cfg(not(feature = "dear-imgui"))]
@@ -288,8 +290,10 @@ impl SimpleMainLoop {
         egui.set_visuals(egui::style::Visuals::dark());
         
         #[cfg(not(feature = "dear-imgui"))]
+        let window_settings = (window.inner_size().width, window.inner_size().height, window.scale_factor());
+        #[cfg(not(feature = "dear-imgui"))]
         let mut egui_backend =
-            kajiya_egui::EguiBackend::new(rg_renderer.device().clone(), &window, egui);
+            kajiya_egui::EguiBackend::new(rg_renderer.device().clone(), window_settings, &mut egui);
 
         #[cfg(not(feature = "dear-imgui"))]
         egui_backend.create_graphics_resources(swapchain_extent);
@@ -320,7 +324,7 @@ impl SimpleMainLoop {
             imgui,
             #[cfg(not(feature = "dear-imgui"))]
             egui_backend,
-
+            egui,
             #[cfg(feature = "puffin-server")]
             _puffin_server: puffin_server,
         };
@@ -463,6 +467,7 @@ impl SimpleMainLoop {
                 #[cfg(not(feature = "dear-imgui"))]
                 egui: Some(EguiContext {
                     egui_backend: &mut optional.egui_backend,
+                    egui_ctx: &mut optional.egui,
                     ui_renderer: &mut ui_renderer,
                     dt_filtered,
                     window: &window,

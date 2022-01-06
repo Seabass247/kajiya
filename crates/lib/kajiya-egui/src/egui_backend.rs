@@ -27,21 +27,22 @@ pub struct EguiBackend {
     inner: Arc<Mutex<EguiBackendInner>>,
     device: Arc<Device>,
     pub raw_input: ash_egui::egui::RawInput,
-    pub context: egui::CtxRef,
 }
 
 impl EguiBackend {
     pub fn new(
         device: Arc<Device>,
-        window: &winit::window::Window,
-        mut context: CtxRef,
+        window_settings: (u32, u32, f64),
+        context: &mut CtxRef,
     ) -> Self {
+        let (window_width, window_height, window_scale_factor) = window_settings;
+
         // Create raw_input
         let raw_input = egui::RawInput {
-            pixels_per_point: Some(window.scale_factor() as f32),
+            pixels_per_point: Some(window_scale_factor as f32),
             screen_rect: Some(egui::Rect::from_min_size(
                 Default::default(),
-                vec2(window.inner_size().width as f32, window.inner_size().height as f32) / window.scale_factor() as f32,
+                vec2(window_width as f32, window_height as f32) / window_scale_factor as f32,
             )),
             time: Some(0.0),
             ..Default::default()
@@ -49,13 +50,13 @@ impl EguiBackend {
     
         let egui_renderer = {
             ash_egui::Renderer::new(
-                window.inner_size().width,
-                window.inner_size().height,
-                window.scale_factor(),
+                window_width,
+                window_height,
+                window_scale_factor,
                 &device.raw,
                 &device.physical_device().properties,
                 &device.physical_device().memory_properties,
-                &mut context,
+                context,
                 raw_input.clone(),
             )
         };
@@ -66,7 +67,6 @@ impl EguiBackend {
                 egui_renderer,
                 gfx: None,
             })),
-            context,
             raw_input,
         }
     }
@@ -109,6 +109,7 @@ impl EguiBackend {
 
     pub fn prepare_frame<'a>(
         &mut self,
+        context: &mut CtxRef,
         dt: f32,
         // window: &winit::window::Window,
     ) {
@@ -120,11 +121,12 @@ impl EguiBackend {
             self.raw_input.time = Some(0.0);
         }
 
-        self.context.begin_frame(self.raw_input.take());
+        context.begin_frame(self.raw_input.take());
     }
 
     pub fn finish_frame(
         &mut self,
+        context: &mut CtxRef,
         window: &winit::window::Window,
         ui_renderer: &mut UiRenderer,
     ) {
@@ -134,8 +136,8 @@ impl EguiBackend {
         let device = self.device.clone();
         let gui_extent = [window.inner_size().width, window.inner_size().height];
 
-        let (_, clipped_shapes) = self.context.end_frame();
-        let clipped_meshes = self.context.tessellate(clipped_shapes);
+        let (_, clipped_shapes) = context.end_frame();
+        let clipped_meshes = context.tessellate(clipped_shapes);
 
         ui_renderer.ui_frame = Some((
             Box::new(move |cb| {
