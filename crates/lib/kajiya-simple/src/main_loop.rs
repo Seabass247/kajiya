@@ -240,6 +240,12 @@ impl SimpleMainLoop {
         // Physical window extent in pixels
         let swapchain_extent = [window.inner_size().width, window.inner_size().height];
 
+        log::info!(
+            "#swapchain_extent#: {}x{}",
+            swapchain_extent[0],
+            swapchain_extent[1]
+        );
+
         // Find the internal rendering resolution
         let render_extent = [
             (builder.resolution[0] as f32 / builder.temporal_upsampling) as u32,
@@ -247,7 +253,7 @@ impl SimpleMainLoop {
         ];
 
         log::info!(
-            "Internal rendering extent: {}x{}",
+            "#render_extent#: {}x{}",
             render_extent[0],
             render_extent[1]
         );
@@ -256,7 +262,7 @@ impl SimpleMainLoop {
 
         if builder.temporal_upsampling != 1.0 {
             log::info!(
-                "Temporal upscaling extent: {}x{}",
+                "#temporal_upscale_extent#: {}x{}",
                 temporal_upscale_extent[0],
                 temporal_upscale_extent[1]
             );

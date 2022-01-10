@@ -2,14 +2,14 @@
 #![allow(clippy::unneeded_field_pattern, clippy::cast_ptr_alignment)]
 
 use arrayvec::ArrayVec;
-use ash::{vk::{self, RenderPass}, Device};
-use egui::{Context, epaint::{Vertex, self}, CtxRef, vec2, RawInput, FontImage};
+use ash::{vk, Device};
+use egui::{epaint::Vertex, CtxRef, RawInput};
 use memoffset::offset_of;
 use std::{
     ffi::CStr,
     mem,
     os::raw::{c_uchar, c_void},
-    slice, ops::Index,
+    slice,
 };
 use bytemuck::bytes_of;
 
@@ -84,7 +84,7 @@ impl Renderer {
         device: &Device,
         physical_device_properties: &vk::PhysicalDeviceProperties,
         physical_device_memory_properties: &vk::PhysicalDeviceMemoryProperties,
-        mut egui: &mut CtxRef,
+        egui: &mut CtxRef,
         raw_input: RawInput
     ) -> Self {
         let vertex_shader = load_shader_module(device, include_bytes!("egui.vert.spv"));
@@ -182,11 +182,7 @@ impl Renderer {
             )
         };
 
-        let (_,_) = egui.run(raw_input, |ctx| {
-            // egui::CentralPanel::default().show(&ctx, |ui| {
-            //     ui.label("Hello egui!");
-            // });
-        });
+        let (_,_) = egui.run(raw_input, |_ctx| {});
         let texture = egui.font_image();
 
         let (image_buffer, image_mem_offset) = {

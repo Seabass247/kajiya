@@ -101,9 +101,9 @@ impl EguiBackend {
 
     pub fn handle_event(
         &mut self,
-        window: &winit::window::Window,
-        egui: &mut ash_egui::egui::Context,
-        event: &winit::event::Event<'_, ()>,
+        _window: &winit::window::Window,
+        _egui: &mut ash_egui::egui::Context,
+        _event: &winit::event::Event<'_, ()>,
     ) {
     }
 
