@@ -9,7 +9,7 @@ use crate::{
     },
 };
 use glam::{Affine3A, Vec2, Vec3};
-use kajiya_asset::mesh::{AssetRef, GpuImage, MeshMaterialFlags, PackedTriMesh, PackedVertex};
+use kajiya_asset::{mesh::{AssetRef, GpuImage, MeshMaterialFlags, PackedTriMesh, PackedVertex, TriangleMesh, GpuImageImmediate, FormattedTriangleMesh}, image::CreateGpuImageImmediate};
 use kajiya_backend::{
     ash::vk::{self, ImageView},
     dynamic_constants::DynamicConstants,
@@ -26,8 +26,10 @@ use rust_shaders_shared::{
     frame_constants::{FrameConstants, GiCascadeConstants, MAX_CSGI_CASCADE_COUNT},
     view_constants::ViewConstants,
 };
-use std::{collections::HashMap, mem::size_of, sync::Arc};
+use turbosloth::{Lazy, LazyCache};
+use std::{collections::{HashMap, HashSet}, mem::size_of, sync::Arc};
 use vulkan::buffer::{Buffer, BufferDesc};
+use turbosloth::*;
 
 #[cfg(feature = "dlss")]
 use crate::renderers::dlss::DlssRenderer;
@@ -207,6 +209,30 @@ fn load_gpu_image_asset(
         .mip_levels(asset.mips.len() as _);
 
     let initial_data = asset
+        .mips
+        .iter()
+        .enumerate()
+        .map(|(mip_level, mip)| ImageSubResourceData {
+            data: mip.as_slice(),
+            row_pitch: ((desc.extent[0] as usize) >> mip_level).max(1) * 4,
+            slice_pitch: 0,
+        })
+        .collect::<Vec<_>>();
+
+    Arc::new(device.create_image(desc, initial_data).unwrap())
+}
+
+
+fn load_gpu_image_immediate(
+    device: Arc<kajiya_backend::Device>,
+    immediate:&GpuImageImmediate,
+) -> Arc<Image> {
+
+    let desc = ImageDesc::new_2d(immediate.format, [immediate.extent[0], immediate.extent[1]])
+        .usage(vk::ImageUsageFlags::SAMPLED)
+        .mip_levels(immediate.mips.len() as _);
+
+    let initial_data = immediate
         .mips
         .iter()
         .enumerate()
@@ -470,6 +496,7 @@ impl WorldRenderer {
                 })
                 .run()
         };
+
         /*let loaded_images = {
             let device = self.device.clone();
             unique_images
@@ -486,6 +513,175 @@ impl WorldRenderer {
         {
             let mesh_map_gpu_ids: Vec<BindlessImageHandle> = mesh
                 .maps
+                .as_slice()
+                .iter()
+                .map(|map| material_map_to_image[map])
+                .collect();
+
+            for mat in &mut materials {
+                for m in &mut mat.maps {
+                    *m = mesh_map_gpu_ids[*m as usize].0;
+                }
+            }
+        }
+
+        // If using emissives as lights, flag it in the material parameters
+        if opts.use_lights {
+            for mat in materials.iter_mut() {
+                mat.flags |= MeshMaterialFlags::MESH_MATERIAL_FLAG_EMISSIVE_USED_AS_LIGHT;
+            }
+        }
+
+        let vertex_data_offset = self.vertex_buffer_written as u32;
+
+        let mut buffer_builder = BufferBuilder::new();
+        let vertex_index_offset =
+            buffer_builder.append(mesh.indices.as_slice()) as u32 + vertex_data_offset;
+        let vertex_core_offset =
+            buffer_builder.append(mesh.verts.as_slice()) as u32 + vertex_data_offset;
+        let vertex_uv_offset =
+            buffer_builder.append(mesh.uvs.as_slice()) as u32 + vertex_data_offset;
+        let vertex_mat_offset =
+            buffer_builder.append(mesh.material_ids.as_slice()) as u32 + vertex_data_offset;
+        let vertex_aux_offset =
+            buffer_builder.append(mesh.colors.as_slice()) as u32 + vertex_data_offset;
+        let vertex_tangent_offset =
+            buffer_builder.append(mesh.tangents.as_slice()) as u32 + vertex_data_offset;
+        let mat_data_offset = buffer_builder.append(materials) as u32 + vertex_data_offset;
+
+        let total_buffer_size = buffer_builder.current_offset();
+        let mut vertex_buffer = self.vertex_buffer.lock();
+        buffer_builder.upload(
+            self.device.as_ref(),
+            Arc::get_mut(&mut *vertex_buffer).expect("refs may not be retained"),
+            self.vertex_buffer_written,
+        );
+        self.vertex_buffer_written += total_buffer_size;
+
+        let mesh_buffer_dst = unsafe {
+            let mut mesh_buffer = self.mesh_buffer.lock();
+            let mesh_buffer = Arc::get_mut(&mut *mesh_buffer).expect("refs may not be retained");
+            let mesh_buffer_dst =
+                mesh_buffer.allocation.mapped_ptr().unwrap().as_ptr() as *mut GpuMesh;
+            std::slice::from_raw_parts_mut(mesh_buffer_dst, MAX_GPU_MESHES)
+        };
+
+        let base_da = vertex_buffer.device_address(&self.device);
+        let vertex_buffer_da = base_da + vertex_core_offset as u64;
+        let index_buffer_da = base_da + vertex_index_offset as u64;
+
+        let blas = self
+            .device
+            .create_ray_tracing_bottom_acceleration(
+                &RayTracingBottomAccelerationDesc {
+                    geometries: vec![RayTracingGeometryDesc {
+                        geometry_type: RayTracingGeometryType::Triangle,
+                        vertex_buffer: vertex_buffer_da,
+                        index_buffer: index_buffer_da,
+                        vertex_format: vk::Format::R32G32B32_SFLOAT,
+                        vertex_stride: size_of::<PackedVertex>(),
+                        parts: vec![RayTracingGeometryPart {
+                            index_count: mesh.indices.len(),
+                            index_offset: 0,
+                            max_vertex: mesh
+                                .indices
+                                .as_slice()
+                                .iter()
+                                .copied()
+                                .max()
+                                .expect("mesh must not be empty"),
+                        }],
+                    }],
+                },
+                &self.accel_scratch,
+            )
+            .expect("blas");
+
+        mesh_buffer_dst[mesh_idx] = GpuMesh {
+            vertex_core_offset,
+            vertex_uv_offset,
+            vertex_mat_offset,
+            vertex_aux_offset,
+            vertex_tangent_offset,
+            mat_data_offset,
+            index_offset: vertex_index_offset,
+        };
+
+        self.meshes.push(UploadedTriMesh {
+            index_buffer_offset: vertex_index_offset as u64,
+            index_count: mesh.indices.len() as _,
+        });
+
+        self.mesh_blas.push(Arc::new(blas));
+
+        let mesh_lights = if opts.use_lights {
+            let emissive_materials = mesh
+                .materials
+                .iter()
+                .map(|mat| mat.emissive[0] > 0.0 || mat.emissive[1] > 0.0 || mat.emissive[2] > 0.0)
+                .collect::<Vec<bool>>();
+
+            let mut mesh_lights: Vec<TriangleLight> = Vec::new();
+            for indices in mesh.indices.as_slice().chunks_exact(3) {
+                let mat_idx = mesh.material_ids[indices[0] as usize] as usize;
+                if !emissive_materials[mat_idx] {
+                    continue;
+                }
+
+                let v0 = mesh.verts[indices[0] as usize].pos;
+                let v1 = mesh.verts[indices[1] as usize].pos;
+                let v2 = mesh.verts[indices[2] as usize].pos;
+                let radiance = mesh.materials[mat_idx].emissive;
+
+                mesh_lights.push(TriangleLight {
+                    verts: [v0, v1, v2],
+                    radiance,
+                });
+            }
+
+            mesh_lights
+        } else {
+            Vec::new()
+        };
+
+        self.mesh_lights.push(MeshLightSet {
+            lights: mesh_lights,
+        });
+
+        MeshHandle(mesh_idx)
+    }
+
+    pub fn add_runtime_mesh(
+        &mut self,
+        mesh: &'static FormattedTriangleMesh,
+        opts: AddMeshOptions,
+    ) -> MeshHandle {
+
+        let mesh_idx = self.meshes.len();
+        let all_maps: Vec<GpuImageImmediate>  = mesh.maps.iter().map(|map| {
+            map.create().unwrap()
+        }).collect();
+        let mut unique_images: Vec<GpuImageImmediate> = all_maps.clone();
+        unique_images.sort();
+        unique_images.dedup();
+
+        let loaded_images = {
+            let device = self.device.clone();
+            easy_parallel::Parallel::new()
+                .each(unique_images.iter(), |immediate| {
+                    load_gpu_image_immediate(device, immediate)
+                })
+                .run()
+        };
+        
+        let loaded_images = loaded_images.into_iter().map(|img| self.add_image(img));
+
+        let material_map_to_image: HashMap<GpuImageImmediate, BindlessImageHandle> =
+            unique_images.into_iter().zip(loaded_images).collect();
+
+        let mut materials = mesh.materials.as_slice().to_vec();
+        {
+            let mesh_map_gpu_ids: Vec<BindlessImageHandle> = all_maps
                 .as_slice()
                 .iter()
                 .map(|map| material_map_to_image[map])

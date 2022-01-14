@@ -117,6 +117,7 @@ pub fn import_image_data(
     document: &Document,
     base: Option<&Path>,
     buffer_data: &[Bytes],
+    import_type: ImportType,
 ) -> Result<Vec<ImageSource>> {
     let mut images = Vec::new();
 
@@ -133,9 +134,15 @@ pub fn import_image_data(
                     }
                     Scheme::Data(None, ..) => return Err(Error::ExternalReferenceInSliceImport),
                     Scheme::Unsupported => return Err(Error::UnsupportedScheme),
-                    Scheme::File(path) => images.push(ImageSource::File(path.into())),
+                    Scheme::File(path) => match import_type {
+                        ImportType::Immediate => images.push(ImageSource::LoadImmediate(path.into())),
+                        ImportType::Lazy => images.push(ImageSource::File(path.into())),
+                    }
                     Scheme::Relative if base.is_some() => {
-                        images.push(ImageSource::File(base.unwrap().join(uri)))
+                        match import_type {
+                            ImportType::Immediate => images.push(ImageSource::LoadImmediate(base.unwrap().join(uri))),
+                            ImportType::Lazy => images.push(ImageSource::File(base.unwrap().join(uri))),
+                        }
                     }
                     Scheme::Relative => return Err(Error::UnsupportedScheme),
                 }
@@ -154,24 +161,29 @@ pub fn import_image_data(
     Ok(images)
 }
 
-fn import_impl(Gltf { document, blob }: Gltf, base: Option<&Path>) -> Result<Import> {
+fn import_impl(Gltf { document, blob }: Gltf, base: Option<&Path>, import_type: ImportType) -> Result<Import> {
     let buffer_data = import_buffer_data(&document, base, blob)?;
-    let image_data = import_image_data(&document, base, &buffer_data)?;
+    let image_data = import_image_data(&document, base, &buffer_data, import_type)?;
     let import = (document, buffer_data, image_data);
     Ok(import)
 }
 
-fn import_path(path: &Path) -> Result<Import> {
+pub enum ImportType {
+    Immediate,
+    Lazy,
+}
+
+fn import_path(path: &Path, import_type: ImportType) -> Result<Import> {
     let base = path.parent().unwrap_or_else(|| Path::new("./"));
     let file = fs::File::open(path).map_err(Error::Io)?;
     let reader = io::BufReader::new(file);
-    import_impl(Gltf::from_reader(reader)?, Some(base))
+    import_impl(Gltf::from_reader(reader)?, Some(base), import_type)
 }
 
 /// Import some glTF 2.0 from the file system.
-pub fn import<P>(path: P) -> Result<Import>
+pub fn import<P>(path: P, import_type: ImportType) -> Result<Import>
 where
     P: AsRef<Path>,
 {
-    import_path(path.as_ref())
+    import_path(path.as_ref(), import_type)
 }

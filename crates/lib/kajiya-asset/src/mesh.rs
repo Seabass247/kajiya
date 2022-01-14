@@ -23,7 +23,7 @@ use std::{
 };
 use turbosloth::*;
 
-use crate::image::ImageSource;
+use crate::image::{ImageSource, CreateGpuImageImmediate};
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum TexGamma {
@@ -241,15 +241,154 @@ impl Hash for LoadGltfScene {
     }
 }
 
+impl LoadGltfScene {
+    pub fn load(self) -> anyhow::Result<TriangleMesh> {
+        let (gltf, buffers, imgs) = crate::import_gltf::import(&self.path, crate::import_gltf::ImportType::Immediate)
+            .with_context(|| format!("Loading GLTF scene from {:?}", self.path))?;
+
+        if let Some(scene) = gltf.default_scene().or_else(|| gltf.scenes().next()) {
+
+            let mut res: TriangleMesh = TriangleMesh::default();
+
+            let mut process_node = |node: &gltf::scene::Node, xform: Mat4| {
+                if let Some(mesh) = node.mesh() {
+                    let flip_winding_order = xform.determinant() < 0.0;
+
+                    for prim in mesh.primitives() {
+                        let reader = prim.reader(|buffer| Some(&buffers[buffer.index()]));
+
+                        let res_material_index = res.materials.len() as u32;
+
+                        {
+                            let (mut maps, mut material) =
+                                load_gltf_material(&prim.material(), imgs.as_slice());
+
+                            let map_base = res.maps.len() as u32;
+                            for id in material.maps.iter_mut() {
+                                *id += map_base;
+                            }
+
+                            res.materials.push(material);
+                            res.maps.append(&mut maps);
+                        }
+
+                        // Collect positions (required)
+                        let positions = if let Some(iter) = reader.read_positions() {
+                            iter.collect::<Vec<_>>()
+                        } else {
+                            return;
+                        };
+
+                        // Collect normals (required)
+                        let normals = if let Some(iter) = reader.read_normals() {
+                            iter.collect::<Vec<_>>()
+                        } else {
+                            return;
+                        };
+
+                        // Collect tangents (optional)
+                        let tangents = if let Some(iter) = reader.read_tangents() {
+                            iter.collect::<Vec<_>>()
+                        } else {
+                            vec![[1.0, 0.0, 0.0, 0.0]; positions.len()]
+                        };
+
+                        // Collect uvs (optional)
+                        let mut uvs = if let Some(iter) = reader.read_tex_coords(0) {
+                            iter.into_f32().collect::<Vec<_>>()
+                        } else {
+                            vec![[0.0, 0.0]; positions.len()]
+                        };
+
+                        // Collect colors (optional)
+                        let mut colors = if let Some(iter) = reader.read_colors(0) {
+                            iter.into_rgba_f32().collect::<Vec<_>>()
+                        } else {
+                            vec![[1.0, 1.0, 1.0, 1.0]; positions.len()]
+                        };
+
+                        // Collect material ids
+                        let mut material_ids = vec![res_material_index; positions.len()];
+
+                        // --------------------------------------------------------
+                        // Write it all to the output
+
+                        {
+                            let mut indices: Vec<u32>;
+                            let base_index = res.positions.len() as u32;
+
+                            if let Some(indices_reader) = reader.read_indices() {
+                                indices =
+                                    indices_reader.into_u32().map(|i| i + base_index).collect();
+                            } else {
+                                indices =
+                                    (base_index..(base_index + positions.len() as u32)).collect();
+                            }
+
+                            if flip_winding_order {
+                                for tri in indices.chunks_exact_mut(3) {
+                                    tri.swap(0, 2);
+                                }
+                            }
+
+                            // log::info!("Loading a mesh with {} indices", indices.len());
+
+                            res.indices.append(&mut indices);
+                            res.colors.append(&mut colors);
+                            res.material_ids.append(&mut material_ids);
+                        }
+
+                        for v in positions {
+                            let pos = (xform * Vec3::from(v).extend(1.0)).truncate();
+                            res.positions.push(pos.into());
+                        }
+
+                        for v in normals {
+                            let norm = (xform * Vec3::from(v).extend(0.0)).truncate().normalize();
+                            res.normals.push(norm.into());
+                        }
+
+                        for v in tangents {
+                            let v = Vec4::from(v);
+                            let t = (xform * v.truncate().extend(0.0)).truncate().normalize();
+                            res.tangents.push(
+                                t.extend(v.w * if flip_winding_order { -1.0 } else { 1.0 })
+                                    .into(),
+                            );
+                        }
+
+                        res.uvs.append(&mut uvs);
+                    }
+                }
+            };
+
+            let xform = Mat4::from_scale_rotation_translation(
+                Vec3::splat(self.scale),
+                self.rotation,
+                Vec3::ZERO,
+            );
+            for node in scene.nodes() {
+                iter_gltf_node_tree(&node, xform, &mut process_node);
+            }
+
+            Ok(res)
+        } else {
+            Err(anyhow::anyhow!("No default scene found in gltf"))
+        }
+    }
+}
+
 #[async_trait]
 impl LazyWorker for LoadGltfScene {
     type Output = anyhow::Result<TriangleMesh>;
 
     async fn run(self, _ctx: RunContext) -> Self::Output {
-        let (gltf, buffers, imgs) = crate::import_gltf::import(&self.path)
+
+        let (gltf, buffers, imgs) = crate::import_gltf::import(&self.path, crate::import_gltf::ImportType::Lazy)
             .with_context(|| format!("Loading GLTF scene from {:?}", self.path))?;
 
         if let Some(scene) = gltf.default_scene().or_else(|| gltf.scenes().next()) {
+
             let mut res: TriangleMesh = TriangleMesh::default();
 
             let mut process_node = |node: &gltf::scene::Node, xform: Mat4| {
@@ -730,6 +869,13 @@ def_asset! {
     }
 }
 
+#[derive(Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GpuImageImmediate {
+    pub format: kajiya_backend::ash::vk::Format,
+    pub extent: [u32; 3],
+    pub mips: Vec<Vec<u8>>,
+}
+
 // TODO: use `rkyv` instead
 def_asset! {
     #[derive(Clone)]
@@ -803,6 +949,67 @@ pub fn pack_triangle_mesh(mesh: &TriangleMesh) -> PackedTriangleMesh {
         materials: mesh.materials.clone(),
         maps,
     }
+}
+
+pub struct FormattedTriangleMesh {
+    pub verts: Vec<PackedVertex>,
+    pub uvs: Vec<[f32; 2]>,
+    pub tangents: Vec<[f32; 4]>,
+    pub colors: Vec<[f32; 4]>,
+    pub indices: Vec<u32>,
+    pub material_ids: Vec<u32>, 
+    pub materials: Vec<MeshMaterial>,
+    pub maps: Vec<CreateGpuImageImmediate>,
+}
+
+pub fn format_triangle_mesh(mesh: &TriangleMesh) -> &'static FormattedTriangleMesh {
+    let mut verts: Vec<PackedVertex> = Vec::with_capacity(mesh.positions.len());
+
+    for (i, pos) in mesh.positions.iter().enumerate() {
+        let n = mesh.normals[i];
+
+        verts.push(PackedVertex {
+            pos: *pos,
+            normal: pack_unit_direction_11_10_11(n[0], n[1], n[2]),
+        });
+    }
+
+    let maps = mesh
+        .maps
+        .iter()
+        .map(|map| {
+            let (image, params) = match map {
+                MeshMaterialMap::Image { source, params } => (
+                    super::image::LoadImage::new(source).unwrap().create().unwrap(),
+                    *params,
+                ),
+                MeshMaterialMap::Placeholder(values) => (
+                    super::image::CreatePlaceholderImage::new(*values).create().unwrap(),
+                    TexParams {
+                        gamma: crate::mesh::TexGamma::Linear,
+                        use_mips: false,
+                    },
+                ),
+            };
+
+            crate::image::CreateGpuImageImmediate { image, params }
+        })
+        .collect::<Vec<CreateGpuImageImmediate>>();
+
+        let obj = Box::leak(Box::new(
+            FormattedTriangleMesh {
+                verts,
+                uvs: mesh.uvs.clone(),
+                tangents: mesh.tangents.clone(),
+                colors: mesh.colors.clone(),
+                indices: mesh.indices.clone(),
+                material_ids: mesh.material_ids.clone(),
+                materials: mesh.materials.clone(),
+                maps,
+            }
+        ));
+
+        obj
 }
 
 #[derive(Copy, Clone)]

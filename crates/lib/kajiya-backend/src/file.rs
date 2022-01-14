@@ -115,6 +115,14 @@ impl LoadFile {
         let path = canonical_path_from_vfs(path)?;
         Ok(Self { path })
     }
+
+    pub fn load_immediate(self) -> anyhow::Result<Bytes> {
+        let mut buffer = Vec::new();
+        std::io::Read::read_to_end(&mut File::open(&self.path)?, &mut buffer)
+            .with_context(|| format!("LoadFile: trying to read {:?}", self.path))?;
+
+        Ok(Bytes::from(buffer))
+    }
 }
 
 #[async_trait]
