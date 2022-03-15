@@ -4,7 +4,7 @@
 use arrayvec::ArrayVec;
 use ash::{vk, Device};
 use bytemuck::bytes_of;
-use egui::{epaint::Vertex, CtxRef, RawInput};
+use egui::{epaint::Vertex, vec2, Context};
 use memoffset::offset_of;
 use std::{
     ffi::CStr,
@@ -77,6 +77,9 @@ impl Renderer {
     const PUSH_CONSTANT_SIZE: usize = 8;
     const FRAME_COUNT: usize = 2;
 
+    const INDEX_BUFFER_SIZE: usize = Renderer::INDEX_COUNT_PER_FRAME * mem::size_of::<u32>();
+    const VERTEX_BUFFER_SIZE: usize = Renderer::VERTEX_COUNT_PER_FRAME * mem::size_of::<Vertex>();
+
     pub fn new(
         physical_width: u32,
         physical_height: u32,
@@ -84,8 +87,7 @@ impl Renderer {
         device: &Device,
         physical_device_properties: &vk::PhysicalDeviceProperties,
         physical_device_memory_properties: &vk::PhysicalDeviceMemoryProperties,
-        egui: &mut CtxRef,
-        raw_input: RawInput,
+        egui: &mut Context,
     ) -> Self {
         let vertex_shader = load_shader_module(device, include_bytes!("egui.vert.spv"));
         let fragment_shader = load_shader_module(device, include_bytes!("egui.frag.spv"));
@@ -96,9 +98,8 @@ impl Renderer {
                 .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
                 .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE)
                 .anisotropy_enable(false)
-                .min_filter(vk::Filter::LINEAR)
-                .mag_filter(vk::Filter::LINEAR)
-                .mipmap_mode(vk::SamplerMipmapMode::LINEAR)
+                .min_filter(vk::Filter::NEAREST)
+                .mag_filter(vk::Filter::NEAREST)
                 .min_lod(0.0)
                 .max_lod(vk::LOD_CLAMP_NONE);
             unsafe { device.create_sampler(&sampler_create_info, None) }.unwrap()
@@ -181,12 +182,36 @@ impl Renderer {
             )
         };
 
-        let (_, _) = egui.run(raw_input, |_ctx| {});
-        let texture = egui.font_image();
+        let full_output = egui.run(
+            egui::RawInput {
+                pixels_per_point: Some(scale_factor as f32),
+                screen_rect: Some(egui::Rect::from_min_size(
+                    Default::default(),
+                    vec2(physical_width as f32, physical_height as f32) / scale_factor as f32,
+                )),
+                time: Some(0.0),
+                ..Default::default()
+            },
+            |_ctx| {},
+        );
+        let texture_size = egui.fonts().font_image_size();
+        let texture_delta = full_output.textures_delta.set.iter().next().unwrap();
+        let texture = match &texture_delta.1.image {
+            egui::ImageData::Alpha(image) => {
+                assert_eq!(
+                    image.width() * image.height(),
+                    image.pixels.len(),
+                    "Mismatch between texture size and texel count"
+                );
+
+                image
+            }
+            _ => panic!("Egui font texture could not be loaded"),
+        };
 
         let (image_buffer, image_mem_offset) = {
             let buffer_create_info = vk::BufferCreateInfo {
-                size: vk::DeviceSize::from(texture.width as u64 * texture.height as u64 * 4),
+                size: vk::DeviceSize::from(texture_size[0] as u64 * texture_size[1] as u64 * 4),
                 usage: vk::BufferUsageFlags::TRANSFER_SRC,
                 sharing_mode: vk::SharingMode::EXCLUSIVE,
                 ..Default::default()
@@ -241,8 +266,8 @@ impl Renderer {
                 .mip_levels(1)
                 .array_layers(1)
                 .extent(vk::Extent3D {
-                    width: texture.width as u32,
-                    height: texture.height as u32,
+                    width: texture_size[0] as u32,
+                    height: texture_size[1] as u32,
                     depth: 1,
                 });
             unsafe { device.create_image(&image_create_info, None) }.unwrap()
@@ -291,7 +316,7 @@ impl Renderer {
         let image_view = {
             let image_view_create_info = vk::ImageViewCreateInfo::builder()
                 .image(image)
-                .format(vk::Format::R8G8B8A8_UNORM)
+                .format(vk::Format::R8G8B8A8_SRGB)
                 .view_type(vk::ImageViewType::TYPE_2D)
                 .subresource_range(
                     vk::ImageSubresourceRange::builder()
@@ -324,15 +349,13 @@ impl Renderer {
             let image_base =
                 unsafe { (host_mapping as *mut u8).add(image_mem_offset) } as *mut c_uchar;
 
-            assert_eq!(texture.pixels.len(), texture.width * texture.height);
             let srgba_pixels: Vec<u8> = texture
-                .srgba_pixels(0.25)
+                .srgba_pixels(0.5)
                 .flat_map(|srgba| vec![srgba.r(), srgba.g(), srgba.b(), srgba.a()])
-                .collect::<Vec<_>>();
+                .collect();
             unsafe {
                 image_base.copy_from_nonoverlapping(srgba_pixels.as_ptr(), srgba_pixels.len())
             };
-
         }
 
         Self {
@@ -350,8 +373,8 @@ impl Renderer {
             image_buffer,
             host_mem,
             host_mapping,
-            image_width: texture.width as u32,
-            image_height: texture.height as u32,
+            image_width: texture_size[0] as u32,
+            image_height: texture_size[1] as u32,
             image,
             _local_mem: local_mem,
             descriptor_set,
@@ -547,7 +570,7 @@ impl Renderer {
 
             let color_blend_attachments = [vk::PipelineColorBlendAttachmentState {
                 blend_enable: vk::TRUE,
-                src_color_blend_factor: vk::BlendFactor::SRC_ALPHA,
+                src_color_blend_factor: vk::BlendFactor::ONE,
                 dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
                 color_blend_op: vk::BlendOp::ADD,
                 src_alpha_blend_factor: vk::BlendFactor::ONE,
@@ -601,9 +624,6 @@ impl Renderer {
         device: &Device,
         command_buffer: vk::CommandBuffer,
     ) {
-        // TODO: NEED???
-        // update font texture
-        // self.upload_font_texture(command_buffer, &self.egui.fonts().texture());
         {
             let vertex_buffer = self.vertex_buffers[self.frame_index];
             let vertex_mem_offset = self.vertex_mem_offsets[self.frame_index];
@@ -695,11 +715,11 @@ impl Renderer {
 
                 let next_vertex_offset = vertex_offset + mesh.vertices.len();
                 let next_index_offset = index_offset + mesh.indices.len();
-                // if next_vertex_offset > Renderer::VERTEX_COUNT_PER_FRAME
-                //     || next_index_offset > Renderer::INDEX_COUNT_PER_FRAME
-                // {
-                //     break;
-                // }
+                if next_vertex_offset >= Renderer::VERTEX_BUFFER_SIZE
+                    || next_index_offset >= Renderer::INDEX_BUFFER_SIZE
+                {
+                    break;
+                }
 
                 unsafe {
                     vertex_base

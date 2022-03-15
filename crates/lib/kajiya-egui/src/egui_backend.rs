@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use ash_egui::egui::{self, vec2, CtxRef};
+use ash_egui::egui::{self, vec2, Context, RawInput};
 use kajiya::{
     backend::{
         ash::{self, vk},
@@ -29,36 +29,43 @@ pub struct EguiBackend {
     pub raw_input: ash_egui::egui::RawInput,
 }
 
+#[derive(Clone)]
+pub struct EguiState {
+    pub egui_context: Context,
+    pub raw_input: RawInput,
+    pub window_size: (u32, u32),
+    pub window_scale_factor: f64,
+    pub last_mouse_pos: Option<(f32, f32)>,
+    pub last_dt: f64,
+}
+
 impl EguiBackend {
     pub fn new(
         device: Arc<Device>,
-        window_settings: (u32, u32, f64),
-        context: &mut CtxRef,
+        window_size: (u32, u32),
+        window_scale_factor: f64,
+        context: &mut Context,
     ) -> Self {
-        let (window_width, window_height, window_scale_factor) = window_settings;
+
+        let egui_renderer = ash_egui::Renderer::new(
+            window_size.0,
+            window_size.1,
+            window_scale_factor,
+            &device.raw,
+            &device.physical_device().properties,
+            &device.physical_device().memory_properties,
+            context,
+        );
 
         // Create raw_input
         let raw_input = egui::RawInput {
             pixels_per_point: Some(window_scale_factor as f32),
             screen_rect: Some(egui::Rect::from_min_size(
                 Default::default(),
-                vec2(window_width as f32, window_height as f32) / window_scale_factor as f32,
+                vec2(window_size.0 as f32, window_size.1 as f32) / window_scale_factor as f32,
             )),
             time: Some(0.0),
             ..Default::default()
-        };
-
-        let egui_renderer = {
-            ash_egui::Renderer::new(
-                window_width,
-                window_height,
-                window_scale_factor,
-                &device.raw,
-                &device.physical_device().properties,
-                &device.physical_device().memory_properties,
-                context,
-                raw_input.clone(),
-            )
         };
 
         Self {
@@ -99,28 +106,24 @@ impl EguiBackend {
         }
     }
 
-    pub fn handle_event(
-        &mut self,
-        _window: &winit::window::Window,
-        _egui: &mut ash_egui::egui::Context,
-        _event: &winit::event::Event<'_, ()>,
-    ) {
-    }
-
-    pub fn prepare_frame(&mut self, context: &mut CtxRef, dt: f32) {
-        // update time
-        if let Some(time) = self.raw_input.time {
-            self.raw_input.time = Some(time + dt as f64);
+    pub fn prepare_frame(state: &mut EguiState) {
+        // Update time
+        if let Some(time) = state.raw_input.time {
+            state.raw_input.time = Some(time + state.last_dt);
         } else {
-            self.raw_input.time = Some(0.0);
+            state.raw_input.time = Some(0.0);
         }
 
-        context.begin_frame(self.raw_input.take());
+        // Begin frame for the context
+        state.egui_context.begin_frame(state.raw_input.clone());
+
+        // Clear events to prevent repeated events in next frame
+        state.raw_input.events.clear();
     }
 
     pub fn finish_frame(
         &mut self,
-        context: &mut CtxRef,
+        context: &mut Context,
         gui_render_extent: (u32, u32),
         ui_renderer: &mut UiRenderer,
     ) {
@@ -129,7 +132,8 @@ impl EguiBackend {
         let inner = self.inner.clone();
         let device = self.device.clone();
 
-        let (_, clipped_shapes) = context.end_frame();
+        let full_output = context.end_frame();
+        let clipped_shapes = full_output.shapes;
         let clipped_meshes = context.tessellate(clipped_shapes);
 
         ui_renderer.ui_frame = Some((
@@ -273,7 +277,7 @@ fn create_egui_framebuffer(
 ) -> (vk::Framebuffer, Arc<Image>) {
     let tex = device
         .create_image(
-            ImageDesc::new_2d(vk::Format::R8G8B8A8_UNORM, surface_resolution)
+            ImageDesc::new_2d(vk::Format::R8G8B8A8_SRGB, surface_resolution)
                 .usage(vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::COLOR_ATTACHMENT),
             vec![],
         )
