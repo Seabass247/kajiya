@@ -1,4 +1,4 @@
-use kajiya_asset::mesh::{PackedTriMesh, MeshMaterialMap, TexParams, PackedVertex, FormattedTriangleMesh, format_triangle_mesh};
+use kajiya_asset::mesh::{PackedTriMesh, MeshMaterialMap, TexParams, PackedVertex, FormattedTriangleMesh, format_triangle_mesh, TriangleMesh};
 use kajiya_asset::mesh::{pack_triangle_mesh, GpuImage, LoadGltfScene};
 use glam::Quat;
 use turbosloth::*;
@@ -20,16 +20,9 @@ impl WorldRenderer {
 
     pub fn load_gltf_mesh(
         &mut self,
-        path: impl Into<std::path::PathBuf>,
-        scale: f32,
         opts: AddMeshOptions,
+        mesh: &TriangleMesh,
     ) -> anyhow::Result<MeshHandle> {
-        let mesh = LoadGltfScene {
-            path: path.into(),
-            scale,
-            rotation: Quat::IDENTITY,
-        }.load()?;
-
         Ok(self.add_runtime_mesh(
             format_triangle_mesh(&mesh),
             opts,
